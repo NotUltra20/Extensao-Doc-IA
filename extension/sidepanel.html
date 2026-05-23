@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leitor de Documentos IA</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="header">
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="leitor" role="tab" aria-selected="true">Leitor</button>
+      <button type="button" class="tab" data-tab="config" role="tab" aria-selected="false">Configurações</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="panel-leitor" class="panel active" role="tabpanel">
+      <div id="drop-zone" class="drop-zone" tabindex="0">
+        <input type="file" id="file-input" accept=".pdf,.docx,.xlsx,.xls,.csv" hidden />
+        <div class="drop-zone-inner">
+          <span class="drop-icon" aria-hidden="true">📄</span>
+          <p class="drop-title">Arraste um arquivo aqui</p>
+          <p class="drop-hint">PDF, DOCX, XLSX ou CSV</p>
+          <button type="button" id="btn-browse" class="btn btn-secondary">Escolher do computador</button>
+        </div>
+        <div id="file-info" class="file-info hidden">
+          <span id="file-name" class="file-name"></span>
+          <button type="button" id="btn-remove-file" class="btn-icon" title="Remover arquivo">✕</button>
+        </div>
+      </div>
+
+      <label class="label" for="prompt-input">O que você quer saber sobre o arquivo?</label>
+      <textarea
+        id="prompt-input"
+        class="textarea"
+        rows="4"
+        placeholder="Ex.: Faça um resumo em tópicos"
+      ></textarea>
+
+      <div class="actions">
+        <button type="button" id="btn-analyze" class="btn btn-primary" disabled>
+          Enviar para IA
+        </button>
+        <button type="button" id="btn-clear-output" class="btn btn-ghost">Limpar resposta</button>
+      </div>
+
+      <div class="output-section">
+        <div class="output-header">
+          <span class="label">Resposta da IA</span>
+          <span id="status-badge" class="status-badge hidden"></span>
+        </div>
+        <div id="output" class="output" aria-live="polite">
+          <p class="output-placeholder">A resposta aparecerá aqui após você enviar uma pergunta.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-config" class="panel hidden" role="tabpanel">
+      <p class="config-intro">
+        Suas chaves ficam apenas no navegador (armazenamento local da extensão).
+      </p>
+
+      <label class="label" for="provider-select">Provedor de IA</label>
+      <select id="provider-select" class="select">
+        <option value="gemini">Google Gemini</option>
+        <option value="groq">Groq Cloud</option>
+      </select>
+
+      <p id="provider-hint" class="provider-hint"></p>
+
+      <div id="gemini-key-block">
+        <label class="label" for="gemini-api-key">Chave da API Gemini</label>
+        <div class="input-with-toggle">
+          <input type="password" id="gemini-api-key" class="input" placeholder="Sua chave de API" autocomplete="off" />
+          <button type="button" class="btn-icon btn-toggle-key" data-target="gemini-api-key" title="Mostrar/ocultar chave">👁</button>
+        </div>
+      </div>
+
+      <div id="groq-key-block" class="hidden">
+        <label class="label" for="groq-api-key">Chave da API Groq</label>
+        <div class="input-with-toggle">
+          <input type="password" id="groq-api-key" class="input" placeholder="Sua chave de API" autocomplete="off" />
+          <button type="button" class="btn-icon btn-toggle-key" data-target="groq-api-key" title="Mostrar/ocultar chave">👁</button>
+        </div>
+      </div>
+
+      <label class="label" for="model-select">Modelo</label>
+      <select id="model-select" class="select"></select>
+
+      <div class="config-actions">
+        <button type="button" id="btn-save-settings" class="btn btn-primary">Salvar configurações</button>
+      </div>
+      <p id="settings-message" class="settings-message hidden"></p>
+    </section>
+  </main>
+
+  <script src="lib/xlsx.full.min.js"></script>
+  <script src="lib/mammoth.browser.min.js"></script>
+  <script src="lib/pdf-lib.min.js"></script>
+  <script src="lib/pdf.min.js"></script>
+  <script src="scripts/storage.js"></script>
+  <script src="scripts/query-understanding.js"></script>
+  <script src="scripts/relevance.js"></script>
+  <script src="scripts/pdf-text.js"></script>
+  <script src="scripts/pdf-splitter.js"></script>
+  <script src="scripts/smart-context.js"></script>
+  <script src="scripts/file-parser.js"></script>
+  <script src="scripts/markdown-render.js"></script>
+  <script src="scripts/gemini.js"></script>
+  <script src="scripts/groq.js"></script>
+  <script src="scripts/ai-analyzer.js"></script>
+  <script src="scripts/app.js"></script>
+</body>
+</html>
