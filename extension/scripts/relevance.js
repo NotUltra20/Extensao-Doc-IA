@@ -95,9 +95,47 @@ function chunkPlainText(text, fileType) {
  * @param {Array<{id: string, text: string, label?: string, page?: number}>} chunks
  * @param {ReturnType<typeof understandQuery>} query
  */
-function selectRelevantChunks(chunks, query) {
-  if (query.intent === "full" || !chunks.length) {
+function selectRelevantChunks(chunks, query, limits = {}) {
+  const maxChars = limits.maxChars ?? MAX_CHARS_FILTERED;
+  const maxChunks = limits.maxChunks ?? MAX_CHUNKS;
+  const minScore = limits.minScore ?? MIN_SCORE_THRESHOLD;
+  const forceFilter = limits.forceFilter === true;
+
+  const neverFull = limits.neverFull === true;
+
+  if (!chunks.length) {
+    return {
+      useFull: !neverFull,
+      chunks: [],
+      reason: query.reason,
+      fallbackSample: neverFull,
+    };
+  }
+
+  if (query.intent === "full" && !forceFilter) {
     return { useFull: true, chunks: [], reason: query.reason };
+  }
+
+  if (query.intent === "full" && forceFilter) {
+    const step = Math.max(1, Math.floor(chunks.length / maxChunks));
+    const selected = [];
+    let totalChars = 0;
+    for (let i = 0; i < chunks.length && selected.length < maxChunks; i += step) {
+      const c = chunks[i];
+      if (totalChars + c.text.length > maxChars) break;
+      selected.push(c);
+      totalChars += c.text.length;
+    }
+    if (selected.length) {
+      return {
+        useFull: false,
+        chunks: selected,
+        reason: limits.isLarge
+          ? "amostra representativa (documento grande)"
+          : "amostra do documento (limite da API)",
+        stats: { matched: chunks.length, sent: selected.length, total: chunks.length },
+      };
+    }
   }
 
   const scored = chunks
@@ -115,10 +153,10 @@ function selectRelevantChunks(chunks, query) {
   }
 
   const bestScore = scored[0].score;
-  if (bestScore < MIN_SCORE_THRESHOLD) {
+  if (bestScore < minScore) {
     return {
       useFull: false,
-      chunks: scored.slice(0, 5),
+      chunks: scored.slice(0, forceFilter ? 4 : 5),
       reason: "correspondência fraca — trechos mais prováveis",
       weakMatch: true,
     };
@@ -129,8 +167,8 @@ function selectRelevantChunks(chunks, query) {
   let totalChars = 0;
 
   for (const item of scored) {
-    if (selected.length >= MAX_CHUNKS) break;
-    if (totalChars + item.text.length > MAX_CHARS_FILTERED) break;
+    if (selected.length >= maxChunks) break;
+    if (totalChars + item.text.length > maxChars) break;
     if (item.score < bestScore * 0.25 && selected.length >= 3) break;
 
     selected.push(item);
@@ -149,7 +187,7 @@ function selectRelevantChunks(chunks, query) {
         if (
           neighbor &&
           !selectedIds.has(neighbor.id) &&
-          totalChars + neighbor.text.length < MAX_CHARS_FILTERED
+          totalChars + neighbor.text.length < maxChars
         ) {
           selected.push({ ...neighbor, score: item.score * 0.5, isContext: true });
           selectedIds.add(neighbor.id);
@@ -168,7 +206,7 @@ function selectRelevantChunks(chunks, query) {
   const fullTextLen = chunks.reduce((s, c) => s + c.text.length, 0);
   const selectedLen = selected.reduce((s, c) => s + c.text.length, 0);
 
-  if (selectedLen > fullTextLen * 0.85) {
+  if (!forceFilter && !limits.neverFull && selectedLen > fullTextLen * 0.85) {
     return { useFull: true, chunks: [], reason: "trechos cobrem quase todo o arquivo" };
   }
 
@@ -184,12 +222,15 @@ function selectRelevantChunks(chunks, query) {
   };
 }
 
-function buildFilteredDocumentText(selection, fileName, query) {
+function buildFilteredDocumentText(selection, fileName, query, limits = {}) {
   if (selection.fallbackSample) {
     return null;
   }
 
+  const largeNote = limits.isLarge ? largeDocNotice(limits) : "";
+
   const header =
+    largeNote +
     `[Busca inteligente local — ${selection.reason}]\n` +
     `Arquivo: ${fileName}\n` +
     `A pergunta foi interpretada como: ${query.intent === "search" ? "busca direcionada" : "extração pontual"}.\n` +

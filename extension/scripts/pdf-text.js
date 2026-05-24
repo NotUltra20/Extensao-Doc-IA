@@ -84,7 +84,7 @@ async function extractPdfTextForSearch(file, query, onProgress) {
   }
 
   const pageSet = new Set();
-  const topHits = ranked.slice(0, 14);
+  const topHits = ranked.slice(0, 10);
   for (const hit of topHits) {
     for (let d = -2; d <= 2; d++) {
       const n = hit.page + d;

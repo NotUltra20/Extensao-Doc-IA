@@ -1,6 +1,6 @@
 # Leitor de Documentos e Planilhas (IA)
 
-Ferramenta para ler **PDF**, **DOCX**, **XLSX** e **CSV**, fazer perguntas em linguagem natural e receber respostas de IA. O produto principal é a **extensão Chrome** (painel lateral); há também um **CLI em Python** para testes locais.
+Ferramenta para ler **PDF**, **DOCX**, **XLSX** e **CSV**, fazer perguntas em linguagem natural e receber respostas de IA. O produto principal é a **extensão Chrome** (que abre uma extensão  em forma de painel lateral); há também um **CLI em Python** feito para testes locais.
 
 **Provedores de IA:** [Google Gemini](https://aistudio.google.com/apikey) e [Groq Cloud](https://console.groq.com/keys).
 
@@ -42,7 +42,9 @@ flowchart TB
   H --> I
 ```
 
-O sistema **não envia o arquivo inteiro** em toda pergunta. Antes de chamar a IA, ele tenta entender o que você pediu e enviar só o que é relevante — isso acelera o processo e reduz custo de API.
+O sistema **não envia o arquivo inteiro** em toda pergunta. Antes de chamar a IA, ele tenta entender o que foi pedido e enviar só o que é relevante, isso acelera o processo e reduz custo de API, que provou ser um grande problema durante testes.
+
+**Documentos grandes** (acima de ~3 MB, ~35k caracteres de texto ou ~35 páginas) **nunca** vão inteiros à API — nem no Gemini, nem na Groq — mesmo em pedidos de “resumo completo”. Nesse caso entram trechos pontuados ou uma **amostra representativa**; a resposta deixa claro que a análise é parcial.
 
 ---
 
@@ -64,7 +66,7 @@ O módulo `query-understanding.js` classifica o pedido:
 
 | Tipo | Exemplos | Comportamento |
 |------|----------|----------------|
-| **Visão geral** | "resumo", "principais pontos", "analise completa" | Tende a usar mais conteúdo do documento |
+| **Visão geral** | "resumo", "principais pontos", "analise completa" | Usa mais trechos; em arquivo **pequeno** pode ir quase tudo; em arquivo **grande**, amostra distribuída |
 | **Busca** | "onde está…", "qual o prazo…", "encontre…" | Foca em trechos/páginas relevantes |
 | **Extração** | "valor da coluna X", "dados sobre…" | Extrai termos e frases-chave |
 
@@ -85,7 +87,9 @@ Antes de qualquer chamada à API:
 
 **PDF com texto:** em muitos casos o sistema envia **só o texto** das páginas escolhidas (sem novo upload de PDF) — bem mais rápido.
 
-**PDF escaneado (só imagem):** pouco ou nenhum texto local → uso do **Gemini** com PDF multimodal. A Groq não lê PDF como imagem; nesse caso use Gemini.
+**PDF escaneado (só imagem):** pouco ou nenhum texto local → uso do **Gemini** com PDF multimodal. A Groq não lê PDF como imagem; nesse caso use Gemini. Se o PDF escaneado for **grande**, só as primeiras páginas (até o limite configurado) são enviadas.
+
+**Limite “documento grande”** (`document-limits.js`): arquivo > 3 MB, texto extraído > 35.000 caracteres ou PDF com mais de 35 páginas.
 
 ### 4. Envio à IA
 
@@ -103,7 +107,7 @@ Limite importante: a API Gemini processa cerca de **50 MB por PDF** na inferênc
 - API compatível com **OpenAI Chat Completions** (`/v1/chat/completions`).
 - Recebe apenas **texto** extraído no navegador.
 - Respostas em geral **muito mais rápidas**; ideal para perguntas pontuais em documentos com camada de texto.
-- Texto enviado limitado a ~100.000 caracteres por requisição.
+- Texto enviado com **limite automático** (~22.000 caracteres por requisição) para evitar estouro de tokens; busca inteligente sempre ativa na Groq.
 
 ### 5. Resposta na interface
 
@@ -123,10 +127,10 @@ Limite importante: a API Gemini processa cerca de **50 MB por PDF** na inferênc
 | Resumo completo de documento enorme | Sim | Texto truncado se passar do limite |
 | Planilhas / Word | Sim | Sim |
 
-Chaves (gratuitas com limites — consulte os sites oficiais):
+Chaves (gratuitas com limites):
 
-- Gemini: https://aistudio.google.com/apikey  
-- Groq: https://console.groq.com/keys  
+- Gemini: https://aistudio.google.com/apikey (Maior qualidade)
+- Groq: https://console.groq.com/keys  (Recomendado para documentos extensos)
 
 ### Modelos disponíveis na extensão
 
@@ -163,10 +167,10 @@ Chaves (gratuitas com limites — consulte os sites oficiais):
 ### Uso
 
 1. Aba **Leitor** → arraste ou escolha o arquivo
-2. Digite a pergunta (ou deixe o texto padrão para resumo)
+2. Digite a pergunta 
 3. **Enviar para IA**
 
-As chaves ficam em `chrome.storage.local` (somente no seu navegador/perfil).
+As chaves ficam em `chrome.storage.local` (somente no seu navegador/perfil) para fins de privacidade.
 
 Mais detalhes de instalação: [extension/README.md](extension/README.md)
 
@@ -255,7 +259,7 @@ O CLI não inclui busca inteligente nem Groq — esses recursos estão na extens
 | PDF na Groq | Apenas texto extraível; sem OCR local |
 | Planilhas muito grandes | Truncagem em ~120.000 caracteres de texto |
 | `.doc` antigo | Não suportado (use `.docx`) |
-| Busca local | Heurística + sinônimos — não é um segundo modelo de IA |
+| Busca local | Heurística + sinônimos — não é um modelo de IA local|
 | Resumo completo em PDF enorme | Pode levar vários minutos (várias partes + unificação) |
 
 ---

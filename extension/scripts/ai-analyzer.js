@@ -1,41 +1,21 @@
-const GROQ_MAX_TEXT_CHARS = 100_000;
-
 async function convertPdfToTextForGroq(file, fileName, prompt, onProgress) {
   onProgress?.("Extraindo texto do PDF para Groq...");
 
   const query = understandQuery(prompt);
-  let pages;
-  let numPages;
+  const sampled = await extractPdfTextForSearch(file, query, onProgress);
+  const { pages, numPages } = sampled;
 
-  if (query.intent === "full") {
-    const full = await extractPdfTextPerPage(file);
-    pages = full.pages;
-    numPages = full.numPages;
-    if (full.totalChars < 100) {
-      throw new Error(
-        "Este PDF não tem texto selecionável. Para PDFs escaneados, use o provedor Google Gemini."
-      );
-    }
-  } else {
-    const sampled = await extractPdfTextForSearch(file, query, onProgress);
-    pages = sampled.pages;
-    numPages = sampled.numPages;
-    if (sampled.totalChars < 100) {
-      throw new Error(
-        "Este PDF não tem texto selecionável. Para PDFs escaneados, use o provedor Google Gemini."
-      );
-    }
+  if (sampled.totalChars < 100) {
+    throw new Error(
+      "Este PDF não tem texto selecionável. Para PDFs escaneados, use o provedor Google Gemini."
+    );
   }
 
   let text = pages
-    .map((p) => `--- Página ${p.page} ---\n${p.text}`)
+    .map((p) => `[p.${p.page}]\n${p.text}`)
     .join("\n\n");
 
-  if (text.length > GROQ_MAX_TEXT_CHARS) {
-    text =
-      text.slice(0, GROQ_MAX_TEXT_CHARS) +
-      `\n\n[... texto truncado em ${GROQ_MAX_TEXT_CHARS} caracteres (${numPages} páginas no total) ...]`;
-  }
+  text = trimTextForGroq(text);
 
   return {
     mode: "text",
@@ -57,6 +37,22 @@ async function analyzeTextWithProvider({
   parsed,
   prompt,
 }) {
+  if (provider === "groq") {
+    const compactText = trimTextForGroq(parsed.text);
+    const userText = buildCompactUserMessage(
+      fileName,
+      fileType,
+      compactText,
+      prompt
+    );
+    return groqGenerateFromText({
+      apiKey,
+      model,
+      userText,
+      systemInstruction: GROQ_SYSTEM_INSTRUCTION,
+    });
+  }
+
   const userText = buildTextUserMessage(
     fileName,
     fileType,
@@ -64,10 +60,6 @@ async function analyzeTextWithProvider({
     parsed.text,
     prompt
   );
-
-  if (provider === "groq") {
-    return groqGenerateFromText({ apiKey, model, userText });
-  }
 
   return geminiGenerate({
     apiKey,
@@ -95,20 +87,32 @@ async function synthesizeWithProvider({
   const sections = partialAnswers
     .map(
       (p) =>
-        `### Parte ${p.partIndex} (páginas ${p.pageFrom}–${p.pageTo})\n${p.answer}`
+        `### Páginas ${p.pageFrom}–${p.pageTo}\n\n${p.answer}`
     )
-    .join("\n\n");
+    .join("\n\n---\n\n");
 
-  const synthesisText =
+  let synthesisText =
+    `Documento: ${fileName} (${partialAnswers.length} partes)\n` +
+    `Pergunta: ${prompt}\n\n` +
+    sections +
+    `\n\nUnifique a resposta sem repetir blocos.`;
+
+  if (provider === "groq") {
+    synthesisText = trimTextForGroq(synthesisText, GROQ_BUDGET.maxDocumentChars - 500);
+    return groqGenerateFromText({
+      apiKey,
+      model,
+      userText: synthesisText,
+      systemInstruction: GROQ_SYSTEM_INSTRUCTION,
+    });
+  }
+
+  synthesisText =
     `O documento "${fileName}" foi analisado em ${partialAnswers.length} partes.\n\n` +
     `Solicitação original do usuário:\n${prompt}\n\n` +
     `--- Análises por parte ---\n\n${sections}\n\n` +
     `---\nCom base em todas as partes acima, responda à solicitação original ` +
     `de forma unificada, completa e sem repetir blocos inteiros.`;
-
-  if (provider === "groq") {
-    return groqGenerateFromText({ apiKey, model, userText: synthesisText });
-  }
 
   return geminiGenerate({
     apiKey,
@@ -117,9 +121,6 @@ async function synthesizeWithProvider({
   });
 }
 
-/**
- * Ponto de entrada unificado (Gemini ou Groq).
- */
 async function analyzeWithAI({
   provider,
   apiKey,
@@ -149,6 +150,7 @@ async function analyzeWithAI({
     parsed,
     prompt,
     onProgress,
+    provider: p,
   });
 
   file = ctx.file ?? file;

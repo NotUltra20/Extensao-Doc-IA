@@ -1,9 +1,9 @@
 /**
- * Pré-seleção inteligente de trechos antes de chamar o Gemini.
+ * Pré-seleção inteligente de trechos antes de chamar a IA.
+ * Documentos grandes nunca vão inteiros — só trechos ou amostra.
  */
 
 const MIN_PDF_TEXT_CHARS = 100;
-const MAX_PDF_PAGES_FILTERED = 35;
 
 async function applySmartContext({
   file,
@@ -12,10 +12,16 @@ async function applySmartContext({
   parsed,
   prompt,
   onProgress,
+  provider,
 }) {
   const query = understandQuery(prompt);
+  const sizeHint = assessDocumentSize({ file, parsed });
+  const limits = getSelectionLimits(provider, sizeHint);
 
-  if (query.intent === "full") {
+  const allowFullBypass =
+    query.intent === "full" && !limits.forceFilter && !sizeHint.isLarge;
+
+  if (allowFullBypass) {
     return {
       file,
       parsed,
@@ -23,28 +29,77 @@ async function applySmartContext({
     };
   }
 
-  onProgress?.("Localizando trechos relevantes...");
+  if (sizeHint.isLarge) {
+    onProgress?.(
+      `Documento grande (${sizeHint.reasons.join(", ")}): selecionando trechos...`
+    );
+  } else {
+    onProgress?.(
+      limits.isGroq
+        ? "Selecionando trechos (limite Groq)..."
+        : "Localizando trechos relevantes..."
+    );
+  }
 
   if (parsed.mode === "pdf" && file) {
-    return applySmartContextPdf(file, fileName, parsed, query, onProgress);
+    return applySmartContextPdf(
+      file,
+      fileName,
+      parsed,
+      query,
+      onProgress,
+      provider
+    );
   }
 
   if (parsed.text?.trim()) {
-    return applySmartContextText(file, fileName, fileType, parsed, query);
+    return applySmartContextText(
+      file,
+      fileName,
+      fileType,
+      parsed,
+      query,
+      limits,
+      sizeHint
+    );
+  }
+
+  if (limits.neverFull) {
+    return {
+      file: null,
+      parsed: {
+        ...parsed,
+        mode: "text",
+        text: "",
+        metadata: { ...parsed.metadata, smartFilter: "unavailable" },
+      },
+      smartMeta: {
+        mode: "filtered",
+        reason: "documento grande sem texto extraível localmente",
+      },
+    };
   }
 
   return { file, parsed, smartMeta: { mode: "full", reason: "sem texto local" } };
 }
 
-async function applySmartContextText(file, fileName, fileType, parsed, query) {
+async function applySmartContextText(
+  file,
+  fileName,
+  fileType,
+  parsed,
+  query,
+  limits,
+  sizeHint
+) {
   const chunks = chunkPlainText(parsed.text, fileType).map((c, i) => ({
     ...c,
     id: c.id || `chunk-${i}`,
   }));
 
-  const selection = selectRelevantChunks(chunks, query);
+  const selection = selectRelevantChunks(chunks, query, limits);
 
-  if (selection.useFull) {
+  if (selection.useFull && !limits.neverFull) {
     return {
       file,
       parsed,
@@ -52,22 +107,53 @@ async function applySmartContextText(file, fileName, fileType, parsed, query) {
     };
   }
 
-  if (selection.fallbackSample) {
-    const sample = parsed.text.slice(0, 25000);
+  if (selection.fallbackSample || (selection.useFull && limits.neverFull)) {
+    const sample = parsed.text.slice(0, limits.fallbackSampleChars);
+    const text = limits.isGroq
+      ? buildCompactFilteredText(
+          { chunks: [{ text: sample, page: null }], fallbackSample: false },
+          fileName,
+          query,
+          limits
+        )
+      : largeDocNotice(limits) + sample;
     return {
       file: null,
       parsed: {
         ...parsed,
         mode: "text",
-        text: sample,
-        metadata: { ...parsed.metadata, smartFilter: "sample" },
+        text,
+        metadata: {
+          ...parsed.metadata,
+          smartFilter: "sample",
+          documentLarge: sizeHint.isLarge,
+        },
       },
-      smartMeta: { mode: "filtered", reason: selection.reason },
+      smartMeta: {
+        mode: "filtered",
+        reason: selection.reason || "amostra (documento grande)",
+      },
     };
   }
 
-  const filtered = buildFilteredDocumentText(selection, fileName, query);
+  const filtered = limits.isGroq
+    ? buildCompactFilteredText(selection, fileName, query, limits)
+    : buildFilteredDocumentText(selection, fileName, query, limits);
+
   if (!filtered) {
+    if (limits.neverFull && parsed.text?.trim()) {
+      const sample = parsed.text.slice(0, limits.fallbackSampleChars);
+      return {
+        file: null,
+        parsed: {
+          ...parsed,
+          mode: "text",
+          text: largeDocNotice(limits) + sample,
+          metadata: { ...parsed.metadata, smartFilter: "sample" },
+        },
+        smartMeta: { mode: "filtered", reason: "fallback amostra" },
+      };
+    }
     return { file, parsed, smartMeta: { mode: "full" } };
   }
 
@@ -83,6 +169,7 @@ async function applySmartContextText(file, fileName, fileType, parsed, query) {
         chunksSent: selection.chunks?.length,
         queryIntent: query.intent,
         useTextOnly: true,
+        documentLarge: sizeHint.isLarge,
       },
     },
     smartMeta: {
@@ -93,14 +180,58 @@ async function applySmartContextText(file, fileName, fileType, parsed, query) {
   };
 }
 
-async function applySmartContextPdf(file, fileName, parsed, query, onProgress) {
+async function applySmartContextPdf(
+  file,
+  fileName,
+  parsed,
+  query,
+  onProgress,
+  provider
+) {
   const { pages, totalChars, numPages } = await extractPdfTextForSearch(
     file,
     query,
     onProgress
   );
 
+  const sizeHint = assessDocumentSize({
+    file,
+    parsed,
+    numPages,
+  });
+  const limits = getSelectionLimits(provider, sizeHint);
+
   if (totalChars < MIN_PDF_TEXT_CHARS) {
+    if (sizeHint.isLarge && numPages > 1) {
+      const pageCount = Math.min(limits.maxPages, numPages);
+      onProgress?.(
+        `PDF escaneado grande: enviando ${pageCount} de ${numPages} páginas...`
+      );
+      const indices = Array.from({ length: pageCount }, (_, i) => i);
+      const partialFile = await buildPdfFromPageIndices(file, indices);
+      return {
+        file: partialFile,
+        parsed: {
+          ...parsed,
+          mode: "pdf",
+          pdfStrategy: "upload",
+          pdfBase64: null,
+          metadata: {
+            ...parsed.metadata,
+            smartFilter: true,
+            pagesSent: indices.map((i) => i + 1),
+            totalPages: numPages,
+            scannedSample: true,
+          },
+        },
+        smartMeta: {
+          mode: "filtered-pdf",
+          pages: indices.map((i) => i + 1),
+          totalPages: numPages,
+          reason: "PDF escaneado grande — amostra de páginas",
+        },
+      };
+    }
     return {
       file,
       parsed,
@@ -118,9 +249,9 @@ async function applySmartContextPdf(file, fileName, parsed, query, onProgress) {
     page: p.page,
   }));
 
-  const selection = selectRelevantChunks(pageChunks, query);
+  const selection = selectRelevantChunks(pageChunks, query, limits);
 
-  if (selection.useFull) {
+  if (selection.useFull && !limits.neverFull) {
     return {
       file,
       parsed,
@@ -130,7 +261,14 @@ async function applySmartContextPdf(file, fileName, parsed, query, onProgress) {
 
   let selectedChunks = selection.chunks?.length
     ? selection.chunks
-    : pageChunks.slice(0, Math.min(15, pageChunks.length));
+    : pageChunks.slice(0, Math.min(limits.maxPages, pageChunks.length));
+
+  if (!selectedChunks.length && limits.neverFull) {
+    selectedChunks = pageChunks.slice(
+      0,
+      Math.min(limits.maxPages, pageChunks.length)
+    );
+  }
 
   if (!selectedChunks.length) {
     return {
@@ -144,14 +282,25 @@ async function applySmartContextPdf(file, fileName, parsed, query, onProgress) {
     ...new Set(selectedChunks.filter((c) => c.page).map((c) => c.page)),
   ].sort((a, b) => a - b);
 
-  const indices = pageNumbers.slice(0, MAX_PDF_PAGES_FILTERED);
-  const filtered = buildFilteredDocumentText(
-    { ...selection, chunks: selectedChunks.filter((c) => indices.includes(c.page)) },
-    fileName,
-    query
-  );
+  const indices = pageNumbers.slice(0, limits.maxPages);
+  const chunkSet = selectedChunks.filter((c) => indices.includes(c.page));
+  const filtered = limits.isGroq
+    ? buildCompactFilteredText(
+        { ...selection, chunks: chunkSet },
+        fileName,
+        query,
+        limits
+      )
+    : buildFilteredDocumentText(
+        { ...selection, chunks: chunkSet },
+        fileName,
+        query,
+        limits
+      );
 
-  if (filtered && filtered.length < 120_000) {
+  const maxTextLen = limits.isGroq ? limits.maxChars + 500 : 120_000;
+
+  if (filtered && filtered.length < maxTextLen) {
     onProgress?.(`Trechos selecionados (${indices.length} páginas de ${numPages})`);
 
     return {
@@ -166,6 +315,7 @@ async function applySmartContextPdf(file, fileName, parsed, query, onProgress) {
           queryIntent: query.intent,
           useTextOnly: true,
           extraction: "pdf-text-fast",
+          documentLarge: sizeHint.isLarge,
         },
       },
       smartMeta: {
@@ -196,6 +346,7 @@ async function applySmartContextPdf(file, fileName, parsed, query, onProgress) {
         pagesSent: indices,
         totalPages: numPages,
         queryIntent: query.intent,
+        documentLarge: sizeHint.isLarge,
       },
     },
     smartMeta: {
