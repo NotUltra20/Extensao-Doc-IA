@@ -67,6 +67,35 @@ function resetOutput() {
   outputEl.innerHTML = OUTPUT_PLACEHOLDER;
 }
 
+/** Texto sem HTML — colar no Word/Excel mantém cor e estilo padrão do destino */
+function getOutputPlainText() {
+  if (outputEl.classList.contains("is-loading")) return "";
+  if (outputEl.querySelector(".output-placeholder")) return "";
+  return outputEl.innerText.replace(/\r\n/g, "\n").trim();
+}
+
+function getTextForClipboard() {
+  const sel = window.getSelection();
+  if (
+    sel &&
+    !sel.isCollapsed &&
+    sel.rangeCount > 0 &&
+    outputEl.contains(sel.getRangeAt(0).commonAncestorContainer)
+  ) {
+    const div = document.createElement("div");
+    div.appendChild(sel.getRangeAt(0).cloneContents());
+    return div.innerText.replace(/\r\n/g, "\n").trim();
+  }
+  return getOutputPlainText();
+}
+
+outputEl.addEventListener("copy", (e) => {
+  const text = getTextForClipboard();
+  if (!text) return;
+  e.preventDefault();
+  e.clipboardData.setData("text/plain", text);
+});
+
 function friendlyProgress(msg) {
   if (!msg) return "Processando...";
   const lower = msg.toLowerCase();
